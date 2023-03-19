@@ -72,6 +72,17 @@ class ExactGP(GP):
         self.prediction_strategy = None
 
     @property
+    def batch_shape(self) -> torch.Size:
+        r"""The batch shape of the model.
+
+        This is a batch shape from an I/O perspective, independent of the internal
+        representation of the model. For a model with `(m)` outputs, a
+        `test_batch_shape x q x d`-shaped input to the model in eval mode returns a
+        distribution of shape `broadcast(test_batch_shape, model.batch_shape) x q x (m)`.
+        """
+        return self.train_inputs[0].shape[:-2]
+
+    @property
     def train_targets(self):
         return self._train_targets
 
@@ -160,9 +171,7 @@ class ExactGP(GP):
                 "all test independent caches exist. Call the model on some data first!"
             )
 
-        model_batch_shape = self.train_inputs[0].shape[:-2]
-
-        if self.train_targets.dim() > len(model_batch_shape) + 1:
+        if self.train_targets.dim() > len(self.batch_shape) + 1:
             raise RuntimeError("Cannot yet add fantasy observations to multitask GPs, but this is coming soon!")
 
         if not isinstance(inputs, list):
@@ -182,17 +191,17 @@ class ExactGP(GP):
 
         # Check whether we can properly broadcast batch dimensions
         try:
-            torch.broadcast_shapes(model_batch_shape, target_batch_shape)
+            torch.broadcast_shapes(self.batch_shape, target_batch_shape)
         except RuntimeError:
             raise RuntimeError(
-                f"Model batch shape ({model_batch_shape}) and target batch shape "
+                f"Model batch shape ({self.batch_shape}) and target batch shape "
                 f"({target_batch_shape}) are not broadcastable."
             )
 
-        if len(model_batch_shape) > len(input_batch_shape):
-            input_batch_shape = model_batch_shape
-        if len(model_batch_shape) > len(target_batch_shape):
-            target_batch_shape = model_batch_shape
+        if len(self.batch_shape) > len(input_batch_shape):
+            input_batch_shape = self.batch_shape
+        if len(self.batch_shape) > len(target_batch_shape):
+            target_batch_shape = self.batch_shape
 
         # If input has no fantasy batch dimension but target does, we can save memory and computation by not
         # computing the covariance for each element of the batch. Therefore we don't expand the inputs to the
