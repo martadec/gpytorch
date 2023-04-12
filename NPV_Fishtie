@@ -1,0 +1,346 @@
+
+import matplotlib.pyplot as plt
+import funnelplot as fp
+import numpy as np
+import numpy_financial as npf
+import pandas as pd
+import csv
+import plotly.graph_objects as go
+
+
+# Inputs
+ore_volume = 14.6  # million tonnes
+cu_price = 8500  # $/t
+total_capital = 90000000  # $ (in millions)
+recovery = 0.75
+capex_year1 = 50000000  # $ (in millions)
+capex_year2 = 40000000  # $ (in millions)
+tax_rate = 0.3
+royalty = 0.0641
+mimosa_share = 0.75
+Kobold_share_mimosa = 0.49
+Kobold_NPV_share = 1 * mimosa_share * Kobold_share_mimosa
+
+
+def safe_divide(numerator, denominator, default=0):
+    if denominator == 0:
+        return default
+    else:
+        return numerator / denominator
+
+
+# Mining cost
+labour_mining = 0.1  # hrs per tonne
+power_mining = 0.001  # mwh per tonne
+diesel_mining = 1.1  # liters per tonne
+maintenance_mining = 0  # percent total
+
+# Processing cost
+labour_processing = 0.1  # hrs per tonne
+power_processing = 0.1  # mwh per tonne
+diesel_processing = 0.5  # liters per tonne
+acid_processing = 0.122  # t per tonne
+maintenance_processing = 0  # percent total
+fixed_cost_processing = 4.5  # $ per tonne
+
+# G&A
+
+admin = 0.1  # percent total
+
+# Macro
+labour_price = 11  # $/hr
+diesel_price = 1.01
+power_price = 0.119
+acid_price = 170  # $per tonne
+limestone_price = 30
+lime_price = 50
+
+years = np.arange(1, 13)
+total_mine_throughput = np.arange(1, 13)
+mining_cost = np.arange(1, 13)
+processing_cost = np.arange(1, 13)
+# Annual ore throughput
+ore_throughput = np.array([0, 0, 381750, 571500, 677348, 596000, 779000, 1000000, 1000000, 1000000, 1000000, 1000000,
+                           1000000])
+waste_throughput = np.array([0.00000, 0, 4772651, 4557007, 4780358, 4021099, 4690852, 6817683, 7121425, 4647482, 3886536,
+                             3886536, 1943268])
+
+# noinspection PyRedeclaration
+total_mine_throughput = ore_throughput + waste_throughput
+
+# AsCu grades
+ascu_grades = np.array([0, 0, 4.05, 2.7, 2.26, 2.59, 2.04, 1.72, 1.49, 1.18, 1.42, 1.18, 1.18])
+
+# Cu production
+cu_production = ore_throughput * recovery * (ascu_grades / 100)
+
+# Revenue
+revenue = cu_production * cu_price
+
+
+# Operating costs
+
+def calculate_mining_cost(rom):
+    mining_cost = safe_divide(((1 + maintenance_mining) * (labour_mining * labour_price + diesel_mining * diesel_price +
+                                                           power_mining * power_price)) * total_mine_throughput, rom)
+    return mining_cost
+
+
+roms = ore_throughput
+for i in range(len(roms)):
+    year = i + 1
+    rom = roms[i]
+    mining_cost = calculate_mining_cost(rom)
+
+    processing_cost = ((1 + maintenance_processing) * (labour_processing * labour_price + diesel_processing *
+                                                       diesel_price +
+                                                       power_processing * power_price
+                                                       + fixed_cost_processing))  # $/t ore
+acid_cost = acid_price * acid_processing
+total_opex = ((mining_cost + processing_cost + acid_cost) * (1+admin)) * ore_throughput
+
+# Capital expenditure
+capex = np.zeros(13)
+capex[0] = -capex_year1
+capex[1] = -capex_year2
+capex[3] = 0
+
+# Depreciation
+
+depreciation = np.array([7500000, 7500000, 7500000, 7500000, 7500000, 7500000, 7500000, 7500000, 7500000, 7500000,
+                         7500000, 7500000, 7500000])
+# Royalties
+
+royalties_paid = royalty * revenue
+royalties_paid = royalties_paid.flatten()
+
+# Taxable income
+taxable_income = revenue - total_opex + capex - depreciation - royalties_paid
+
+# Taxes paid
+taxes = np.zeros(13)
+taxes[taxable_income > 0] = taxable_income[taxable_income > 0] * tax_rate
+
+# Net cash flows
+cash_flows = revenue - total_opex + capex - taxes - royalties_paid
+net_cash_flows = cash_flows.copy()
+
+# Cumulative cash flows
+cumulative_cash_flows = np.cumsum(net_cash_flows)
+
+# NPV and IRR
+discount_rate = 0.15
+npv = npf.npv(discount_rate, net_cash_flows)
+Kobold_npv = npv * Kobold_NPV_share
+irr = npf.irr(net_cash_flows)
+
+
+
+# Print results
+
+print(f"Net present value : {Kobold_npv:,.2f} USD")
+print(f"IRR: {irr * 100:.2f}%")
+print("dep", depreciation)
+print("mining cost", mining_cost)
+print("processing cost", processing_cost)
+
+headers = ["Year", "Revenue", "Total OPEX", "CAPEX", "Taxable Income", "Taxes", "Cash Flow", "Cu production",
+           "Throughput", "ROM", "Opex", "Royalties", "NPV", "IRR"]
+table = []
+for i in range(len(cash_flows)):
+    table.append(
+        [i + 1, revenue[i], total_opex[i], capex[i], taxable_income[i], taxes[i], cash_flows[i], cu_production[i]
+            , total_mine_throughput[i], ore_throughput[i], total_opex[i], royalties_paid[i], npv, irr])
+
+# print(tabulate(table, headers=headers))
+
+
+
+with open('Fishtie_results.csv', 'w', newline='') as csvfile:
+    writer = csv.writer(csvfile)
+    writer.writerow(headers)
+    writer.writerows(table[0:])
+
+
+# filename = "Fishtie_results.csv"
+# subprocess.run(["open", filename])
+
+# starting sensitivity analysis
+
+copper_price_range = np.arange(5000, 11000, 500)
+acid_price_range = np.arange(70, 400, 30)
+recovery_range = np.arange(0.5, 0.85, 0.05)
+total_capital_range = np.arange(5000000, 90000000, 5000000)
+
+# creating empty arrays for the npv values
+npv_copper = np.zeros(len(copper_price_range))
+npv_acid = np.zeros(len(acid_price_range))
+npv_recovery = np.zeros(len(recovery_range))
+npv_total_capital = np.zeros(len(total_capital_range))
+
+
+from matplotlib import ticker
+
+# Iterate over copper price range
+for i in range(len(copper_price_range)):
+    cu_price = copper_price_range[i]
+    # Iterate over acid price range
+    for j in range(len(acid_price_range)):
+        acid_price = acid_price_range[j]
+        # Iterate over recovery range
+        for k in range(len(recovery_range)):
+            recovery = recovery_range[k]
+            # Iterate over capital range
+            for l in range(len(total_capital_range)):
+                total_capital = total_capital_range[l]
+                # Calculate NPV
+
+
+                revenueS = cu_price * (ore_throughput*(ascu_grades/100)*recovery)
+                royalties_paidS = revenueS * royalty
+                rom = ore_throughput
+                capex = np.zeros(13)
+                capex[0] = -capex_year1
+                capex[1] = -capex_year2
+                capex[2] = -total_capital
+                mining_costS = (((1 + maintenance_mining) * (labour_mining * labour_price + diesel_mining *
+                                                           diesel_price +
+                                                           power_mining * power_price)) * total_mine_throughput)/ rom
+                acid_costS = acid_price * acid_processing * ore_throughput
+                total_opexS = (mining_cost + processing_cost) * ore_throughput + acid_costS
+                depreciationS = capex/12
+                taxable_incomeS = revenueS - total_opexS + capex - depreciationS - royalties_paidS
+                taxesS = np.zeros(13)
+                taxesS[taxable_incomeS > 0] = taxable_incomeS[taxable_incomeS > 0] * tax_rate
+                cash_flowS = revenueS + capex - total_opexS - royalties_paidS
+                discount_rateS = 0.15
+                npv = (npf.npv(discount_rateS, cash_flowS)/1000000000)*Kobold_NPV_share
+                print('RevenuesS',revenueS)
+                print('CostsS',total_opexS)
+                print('Acid',acid_costS)
+                print('Roy',royalties_paidS)
+                print('Tax',taxesS)
+                print('capex',capex)
+                print('deprec',depreciation)
+                print('cashflow',cash_flowS)
+                print('npv',npv)
+                # Store NPV value in corresponding array
+                npv_copper[i] += npv
+                npv_acid[j] += npv
+                npv_recovery[k] += npv
+                npv_total_capital[l] += npv
+
+# Create the subplots / 4 charts
+fig, axs = plt.subplots(2, 2, figsize=(15, 15))
+
+# Set the titles for each subplot
+axs[0, 0].set_title('Copper Price')
+axs[0, 1].set_title('Acid Price')
+axs[1, 0].set_title('Recovery')
+axs[1, 1].set_title('Total Capital')
+
+# Set the x-axis labels for each subplot
+axs[0, 0].set_xlabel('Copper price')
+axs[0, 1].set_xlabel('Acid Price')
+axs[1, 0].set_xlabel('Recovery')
+axs[1, 1].set_xlabel('Total Capital')
+
+# Set the y-axis labels for each subplot
+axs[0, 0].set_ylabel('NPV ($ millions)')
+axs[0, 1].set_ylabel('NPV ($ millions)')
+axs[1, 0].set_ylabel('NPV ($ millions)')
+axs[1, 1].set_ylabel('NPV ($ millions)')
+# Format the y-axis tick labels as financial
+#fmt = '${x:,.0f}M'
+#tick = ticker.StrMethodFormatter(fmt)
+#axs[0, 0].yaxis.set_major_formatter(tick)
+#axs[0, 1].yaxis.set_major_formatter(tick)
+#axs[1, 0].yaxis.set_major_formatter(tick)
+#axs[1, 1].yaxis.set_major_formatter(tick)
+
+
+
+fmt1 = '%f.0%%'
+ticks = ticker.FormatStrFormatter(fmt1)
+axs[1, 0].xaxis.set_major_formatter(ticks)
+
+# Plot the data for each sensitivity variable
+axs[0, 0].plot(copper_price_range, npv_copper)
+axs[0, 1].plot(acid_price_range, npv_acid)
+axs[1, 0].plot(recovery_range*100, npv_recovery)
+axs[1, 1].plot(total_capital_range, npv_total_capital)
+
+# Show the plot
+plt.show()
+
+
+
+
+
+
+def project_cash_flows(copper_price1, recovery1, acid_price1):
+    cu_productions = ore_throughput * recovery1 * (ascu_grades/100)
+    revenues = cu_productions * copper_price1
+    acid_cost1 = acid_price1 * acid_processing
+
+    total_opex = (mining_cost+processing_cost + acid_cost1) * ore_throughput
+    royalties_paid1 = revenues * royalty
+    kobold_npv = Kobold_NPV_share
+    yearly_cash_flows = [-capex_year1]
+    for i in range(1, len(revenues)):
+        yearly_cash_flows.append(revenues[i] - total_opex[i] + capex[i] - royalties_paid1[i] - taxes[i])
+
+    # print("yearly_cash",yearly_cash_flows)
+
+    # Calculate the net present value (NPV) of the project
+    discount_rate1 = 0.15  # assume a discount rate of 10%
+    npv1 = npf.npv(discount_rate1, yearly_cash_flows)*kobold_npv/1000000
+
+    # Calculate the internal rate of return (IRR) of the project
+    irr1 = npf.irr(yearly_cash_flows)
+
+    return npv1, irr1
+
+
+def sensitivity_analysis():
+    copper_price_range = np.arange(5000, 10000, 500)
+    recovery_range = np.arange(0.5, 0.8, 0.05)
+    acid_price1_range = np.arange(80, 400, 20)
+    npv_sensitivity = []
+    irr_sensitivity = []
+
+    for copper_price1 in copper_price_range:
+        for recovery1 in recovery_range:
+            for acid_price1 in acid_price1_range:
+                npv1, irr1 = project_cash_flows(copper_price1, recovery1.round(2), acid_price1)
+                npv_sensitivity.append([copper_price1, recovery1.round(2), acid_price1_range,  npv1])
+                irr_sensitivity.append([copper_price1, recovery1.round(2), acid_price1, irr1])
+
+    npv_sensitivity_df = pd.DataFrame(npv_sensitivity, columns=['Copper Price', 'Recovery', 'Acid Price', 'NPV'])
+
+    import subprocess
+    # scatter plot of Copper Price vs. Total Capital with NPV as color
+    plt.figure(figsize=(10, 8))
+    plt.scatter(npv_sensitivity_df['Copper Price'], npv_sensitivity_df['Recovery'], c=npv_sensitivity_df['NPV'])
+    plt.xlabel('Copper Price')
+    plt.ylabel('Recovery')
+    plt.colorbar(label='NPV')
+    plt.title('Sensitivity Analysis - NPV')
+    plt.show()
+
+    # heatmap of Recovery vs. Copper Price with npv as color  [Throws errors - Matt)
+    #data = pd.pivot(npv_sensitivity_df, values='NPV', index='Recovery', columns='Copper Price').round(2)
+    #plt.figure(figsize=(10, 8))
+    #sns.heatmap(data, annot=True, fmt='.1f', )
+    #plt.xlabel('Copper Price')
+    #plt.ylabel('Recovery')
+    #plt.title('Sensitivity Analysis - NPV')
+    #plt.tight_layout()
+    #plt.show()
+
+    npv_range = npv_sensitivity_df.groupby(['Copper Price']).agg({'NPV': [np.min, np.max]})
+    npv_range.columns = ['_'.join(col).strip() for col in npv_range.columns.values]
+    npv_range = npv_range.reset_index()
+
+
+sensitivity_analysis()
